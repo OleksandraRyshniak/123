@@ -110,19 +110,32 @@ def lisa_andmed():
     window.title("Lisa uus film")
     window.geometry("400x350")
 
-    labels = ["Nimi", "Aasta", "Keel", "Režissöör", "Žanr", "Riik"]
+    labels = ["Pealkiri", "Režissöör", "Aasta", "Žanr", "Kestus", "Reiting", "Keel", "Riik", "Kirjeldus"]
     entries = {}
+    with sqlite3.connect("filmid.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM languages")
+        languages = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT name FROM directors")
+        directors = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT name FROM genres")
+        genres = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT name FROM countries")
+        countries = [row[0] for row in cursor.fetchall()]
 
     for i, label in enumerate(labels):
         tk.Label(window, text=label).grid(row=i, column=0, padx=5, pady=5)
-
-        if label == "Keel":
-            with sqlite3.connect("filmid.db") as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM languages")
-                languages = [row[0] for row in cursor.fetchall()]
-            combobox = ttk.Combobox(window, values=languages)
+        if label in ["Keel", "Režissöör", "Žanr", "Riik"]:
+            combobox = ttk.Combobox(window)
             combobox.grid(row=i, column=1, padx=5, pady=5)
+            if label == "Keel":
+                combobox['values'] = languages
+            elif label == "Režissöör":
+                combobox['values'] = directors
+            elif label == "Žanr":
+                combobox['values'] = genres
+            elif label == "Riik":
+                combobox['values'] = countries
             entries[label] = combobox
         else:
             entry = tk.Entry(window)
@@ -130,16 +143,34 @@ def lisa_andmed():
             entries[label] = entry
 
     def submit():
-        data = [entries[label].get() for label in labels]
-        with sqlite3.connect("filmid.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO filmid (nimi, aasta, keel, rezissoor, zanr, riik) VALUES (?, ?, ?, ?, ?, ?)",
-                data
-            )
-            conn.commit()
-        messagebox.showinfo("Edu", "Film edukalt lisatud!")
-        window.destroy()
+        title = entries["Pealkiri"].get()
+        try:
+            with sqlite3.connect("filmid.db") as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*) FROM filmid WHERE title = ?", (title,))
+                if cursor.fetchone()[0] > 0:
+                    messagebox.showerror("Viga", "See film on juba tabelis!")
+                    return
+                cursor.execute("""
+                    INSERT INTO filmid (title, director_id, release_year, genre_id, duration, rating, language_id, country_id, description)
+                    VALUES (?, (SELECT id FROM directors WHERE name=?), ?, (SELECT id FROM genres WHERE name=?), ?, ?, (SELECT id FROM languages WHERE name=?), (SELECT id FROM countries WHERE name=?), ?)
+                """, (
+                    entries["Pealkiri"].get(),
+                    entries["Režissöör"].get(),
+                    entries["Aasta"].get(),
+                    entries["Žanr"].get(),
+                    entries["Kestus"].get(),
+                    entries["Reiting"].get(),
+                    entries["Keel"].get(),
+                    entries["Riik"].get(),
+                    entries["Kirjeldus"].get()
+                ))
+                conn.commit()
+                messagebox.showinfo("Edu", "Film edukalt lisatud!")
+                window.destroy()
+                load_data_from_db()
+        except sqlite3.Error as e:
+            messagebox.showerror("Viga", f"Andmebaasi viga: {e}")
 
     tk.Button(window, text="Lisa", command=submit).grid(row=len(labels), column=1, pady=10)
 
@@ -204,46 +235,15 @@ def insert_tabel(table, value, window):
     try:
         with sqlite3.connect("filmid.db") as conn:
             cursor = conn.cursor()
+            cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE name = ?", (value,))
+            if cursor.fetchone()[0] > 0:
+                messagebox.showerror("Viga", f"See {table.capitalize()} on juba tabelis!")
+                return
             cursor.execute(f"INSERT INTO {table} (name) VALUES (?)", (value,))
             conn.commit()
             messagebox.showinfo("Edu", f"{table.capitalize()} lisatud!")
             window.destroy()
             load_data_from_db()
-    except sqlite3.Error as e:
-        messagebox.showerror("Viga", f"Andmebaasi viga: {e}")
-
-def update_record(record_id, entries, window):
-    try:
-        with sqlite3.connect("filmid.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE filmid
-                SET title=?, 
-                    director_id=(SELECT id FROM directors WHERE name=?), 
-                    release_year=?, 
-                    genre_id=(SELECT id FROM genres WHERE name=?), 
-                    duration=?, 
-                    rating=?, 
-                    language_id=(SELECT id FROM languages WHERE name=?), 
-                    country_id=(SELECT id FROM countries WHERE name=?), 
-                    description=?
-                WHERE id=?
-            """, (
-                entries["Pealkiri"].get(),
-                entries["Režissöör"].get(),
-                entries["Aasta"].get(),
-                entries["Žanr"].get(),
-                entries["Kestus"].get(),
-                entries["Reiting"].get(),
-                entries["Keel"].get(),
-                entries["Riik"].get(),
-                entries["Kirjeldus"].get(),
-                record_id
-            ))
-            conn.commit()
-            messagebox.showinfo("Salvestamine", "Andmed on edukalt uuendatud!")
-            load_data_from_db()
-            window.destroy()
     except sqlite3.Error as e:
         messagebox.showerror("Viga", f"Andmebaasi viga: {e}")
 
@@ -254,7 +254,7 @@ def on_update():
         messagebox.showwarning("Valik puudub", "Palun vali kõigepealt rida!")
         return
     values = tree.item(selected_item[0])['values']
-    record_id = values[0]  # The first column is the database ID
+    record_id = values[0]  
     open_update_window()
 
 def open_update_window():
@@ -262,25 +262,38 @@ def open_update_window():
     if not selected_item:
         messagebox.showwarning("Hoiatus", "Vali film, mida muuta!")
         return
-
     record = tree.item(selected_item)['values']
     update_window = tk.Toplevel(root)
     update_window.title("Muuda andmeid")
     update_window.geometry("400x350")
 
-    labels = ["Pealkiri","Režissöör", "Aasta", "Žanr", "Kestus", "Reiting", "Keel", "Riik", "Kirjeldus"]
+    labels = ["Pealkiri", "Režissöör", "Aasta", "Žanr", "Kestus", "Reiting", "Keel", "Riik", "Kirjeldus"]
     entries = {}
+    with sqlite3.connect("filmid.db") as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM languages")
+        languages = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT name FROM directors")  
+        directors = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT name FROM genres")
+        genres = [row[0] for row in cursor.fetchall()]
+        cursor.execute("SELECT name FROM countries")
+        countries = [row[0] for row in cursor.fetchall()]
 
     for i, label in enumerate(labels):
         tk.Label(update_window, text=label).grid(row=i, column=0, padx=10, pady=5, sticky=tk.W)
 
-        if label == "Keel":
-            with sqlite3.connect("filmid.db") as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM languages")
-                languages = [row[0] for row in cursor.fetchall()]
-            combobox = ttk.Combobox(update_window, values=languages)
+        if label in ["Keel", "Režissöör", "Žanr", "Riik"]:
+            combobox = ttk.Combobox(update_window)
             combobox.grid(row=i, column=1, padx=10, pady=5)
+            if label == "Keel":
+                combobox['values'] = languages
+            elif label == "Režissöör":
+                combobox['values'] = directors
+            elif label == "Žanr":
+                combobox['values'] = genres
+            elif label == "Riik":
+                combobox['values'] = countries
             value = '' if record[i+1] is None else str(record[i+1])
             combobox.set(value)
             entries[label] = combobox
@@ -290,72 +303,6 @@ def open_update_window():
             value = '' if record[i+1] is None else str(record[i+1])
             entry.insert(0, value)
             entries[label] = entry
-
-        if label == "Režissöör":
-            with sqlite3.connect("filmid.db") as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM didectors")
-                directors = [row[0] for row in cursor.fetchall()]
-            combobox = ttk.Combobox(update_window, values=directors)
-            combobox.grid(row=i, column=1, padx=10, pady=5)
-            value = '' if record[i+1] is None else str(record[i+1])
-            combobox.set(value)
-            entries[label] = combobox
-        else:
-            entry = tk.Entry(update_window, width=50)
-            entry.grid(row=i, column=1, padx=10, pady=5)
-            value = '' if record[i+1] is None else str(record[i+1])
-            entry.insert(0, value)
-            entries[label] = entry
-
-        if label == "Žanr":
-            with sqlite3.connect("filmid.db") as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM genres")
-                genres = [row[0] for row in cursor.fetchall()]
-            combobox = ttk.Combobox(update_window, values=genres)
-            combobox.grid(row=i, column=1, padx=10, pady=5)
-            value = '' if record[i+1] is None else str(record[i+1])
-            combobox.set(value)
-            entries[label] = combobox
-        else:
-            entry = tk.Entry(update_window, width=50)
-            entry.grid(row=i, column=1, padx=10, pady=5)
-            value = '' if record[i+1] is None else str(record[i+1])
-            entry.insert(0, value)
-            entries[label] = entry
-
-        if label == "Riik":
-            with sqlite3.connect("filmid.db") as conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT name FROM countries")
-                country = [row[0] for row in cursor.fetchall()]
-            combobox = ttk.Combobox(update_window, values=country)
-            combobox.grid(row=i, column=1, padx=10, pady=5)
-            value = '' if record[i+1] is None else str(record[i+1])
-            combobox.set(value)
-            entries[label] = combobox
-        else:
-            entry = tk.Entry(update_window, width=50)
-            entry.grid(row=i, column=1, padx=10, pady=5)
-            value = '' if record[i+1] is None else str(record[i+1])
-            entry.insert(0, value)
-            entries[label] = entry
-
-
-    def update_record():
-        data = [entries[label].get() for label in labels]
-        with sqlite3.connect("filmid.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE filmid SET pealkiri=?, rezissoor=?,aasta=?, zanr=?, kestus=?, reiting=?, keel=?, riik=?, kirjeldus=? WHERE id=?
-            """, (*data, record[0]))
-            conn.commit()
-        messagebox.showinfo("Edu", "Andmed edukalt muudetud!")
-        update_window.destroy()
-        load_data_from_db()
-
-    tk.Button(update_window, text="Muuda", command=update_record).grid(row=len(labels), column=1, pady=10)
 
 def on_delete():
     global tree
@@ -438,138 +385,3 @@ root.mainloop()
 
 
 
-import sqlite3
-import tkinter as tk
-from tkinter import messagebox, ttk
-
-root = tk.Tk()
-root.title("Filmid")
-entries = {}
-tree = None
-search_entry = None
-
-def create_db():
-    with sqlite3.connect("filmid.db") as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS filmid (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                title TEXT,
-                director_id INTEGER,
-                release_year INTEGER,
-                genre_id INTEGER,
-                duration INTEGER,
-                rating REAL,
-                language_id INTEGER,
-                country_id INTEGER,
-                description TEXT,
-                FOREIGN KEY (director_id) REFERENCES directors(id),
-                FOREIGN KEY (genre_id) REFERENCES genres(id),
-                FOREIGN KEY (language_id) REFERENCES languages(id),
-                FOREIGN KEY (country_id) REFERENCES countries(id)
-            )
-        """)
-        conn.commit()
-
-def load_data_from_db():
-    global tree
-    tree.delete(*tree.get_children())
-    with sqlite3.connect("filmid.db") as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT f.id, f.title, d.name, f.release_year, g.name, f.duration, f.rating, l.name, c.name, f.description
-            FROM filmid f
-            LEFT JOIN directors d ON f.director_id = d.id
-            LEFT JOIN genres g ON f.genre_id = g.id
-            LEFT JOIN languages l ON f.language_id = l.id
-            LEFT JOIN countries c ON f.country_id = c.id
-        """)
-        for row in cursor.fetchall():
-            tree.insert("", tk.END, values=row)
-
-def open_update_window():
-    selected_item = tree.selection()
-    if not selected_item:
-        messagebox.showwarning("Hoiatus", "Vali film, mida muuta!")
-        return
-
-    record = tree.item(selected_item)['values']
-    record_id = record[0]
-
-    update_window = tk.Toplevel(root)
-    update_window.title("Muuda andmeid")
-
-    labels = ["Pealkiri", "Režissöör", "Aasta", "Žanr", "Kestus", "Reiting", "Keel", "Riik", "Kirjeldus"]
-    fields = {}
-    for i, label in enumerate(labels):
-        tk.Label(update_window, text=label).grid(row=i, column=0, padx=5, pady=5, sticky=tk.W)
-        if label in ["Režissöör", "Žanr", "Keel", "Riik"]:
-            with sqlite3.connect("filmid.db") as conn:
-                cursor = conn.cursor()
-                cursor.execute(f"SELECT name FROM {label.lower() + 's'}" if label != "Riik" else "SELECT name FROM countries")
-                options = [row[0] for row in cursor.fetchall()]
-            combo = ttk.Combobox(update_window, values=options)
-            combo.set(record[i+1])
-            combo.grid(row=i, column=1, padx=5, pady=5)
-            fields[label] = combo
-        else:
-            entry = tk.Entry(update_window)
-            entry.insert(0, record[i+1])
-            entry.grid(row=i, column=1, padx=5, pady=5)
-            fields[label] = entry
-
-    def update_record():
-        data = [
-            fields["Pealkiri"].get(),
-            fields["Režissöör"].get(),
-            fields["Aasta"].get(),
-            fields["Žanr"].get(),
-            fields["Kestus"].get(),
-            fields["Reiting"].get(),
-            fields["Keel"].get(),
-            fields["Riik"].get(),
-            fields["Kirjeldus"].get(),
-        ]
-        with sqlite3.connect("filmid.db") as conn:
-            cursor = conn.cursor()
-            cursor.execute("""
-                UPDATE filmid SET
-                    title=?,
-                    director_id=(SELECT id FROM directors WHERE name=?),
-                    release_year=?,
-                    genre_id=(SELECT id FROM genres WHERE name=?),
-                    duration=?,
-                    rating=?,
-                    language_id=(SELECT id FROM languages WHERE name=?),
-                    country_id=(SELECT id FROM countries WHERE name=?),
-                    description=?
-                WHERE id=?
-            """, (*data, record_id))
-            conn.commit()
-        messagebox.showinfo("Edu", "Andmed edukalt muudetud!")
-        update_window.destroy()
-        load_data_from_db()
-
-    tk.Button(update_window, text="Muuda", command=update_record).grid(row=len(labels), column=1, pady=10)
-
-def setup_main_ui():
-    global tree, search_entry
-    search_frame = tk.Frame(root)
-    search_frame.pack(pady=10)
-    search_entry = tk.Entry(search_frame)
-    search_entry.pack(side=tk.LEFT, padx=5)
-    tk.Button(search_frame, text="Otsi", command=load_data_from_db).pack(side=tk.LEFT)
-
-    tree = ttk.Treeview(root, columns=(1,2,3,4,5,6,7,8,9,10), show="headings")
-    tree.pack(fill=tk.BOTH, expand=True)
-    headers = ["ID", "Pealkiri", "Režissöör", "Aasta", "Žanr", "Kestus", "Reiting", "Keel", "Riik", "Kirjeldus"]
-    for i, header in enumerate(headers, 1):
-        tree.heading(i, text=header)
-
-    tk.Button(root, text="Muuda valikut", command=open_update_window).pack(pady=5)
-
-create_db()
-setup_main_ui()
-load_data_from_db()
-
-root.mainloop()
